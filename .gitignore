@@ -1,0 +1,20 @@
+# OSX
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Android
+android/.gradle
+android/app/build
+android/build
+*.apk
+*.ap_
+*.dex
+*.class
+local.properties
+
+# Misc
+.env
