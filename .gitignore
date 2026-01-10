@@ -10,11 +10,15 @@ yarn-error.log
 android/.gradle
 android/app/build
 android/build
-*.apk
 *.ap_
 *.dex
 *.class
 local.properties
+
+# APK files (ignore everywhere except releases/ folder)
+*.apk
+!releases/*.apk
+!releases/**/*.apk
 
 # Misc
 .env

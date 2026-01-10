@@ -55,34 +55,55 @@ jobs:
             mv app-release-unsigned.apk app-release.apk
           fi
 
+      - name: Get version info
+        id: version_info
+        run: |
+          VERSION=$(grep -oP 'versionName "\K[^"]+' android/app/build.gradle)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+      - name: Copy APK to releases folder
+        run: |
+          mkdir -p releases
+          cp android/app/build/outputs/apk/release/app-release.apk \
+             releases/tiny-platformer-v${{ steps.version_info.outputs.version }}-build${{ github.run_number }}.apk
+          ls -lh releases/
+
+      - name: Commit APK to repository
+        if: startsWith(github.ref, 'refs/heads/claude/mobile-platformer-apk-')
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add releases/*.apk
+          git commit -m "🤖 Auto-build: Add APK v${{ steps.version_info.outputs.version }} build #${{ github.run_number }}" || echo "No changes to commit"
+          git push || echo "Push failed, possibly no changes"
+
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
           name: tiny-platformer-apk
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            releases/*.apk
           retention-days: 30
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(grep -oP 'versionName "\K[^"]+' android/app/build.gradle)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Create Release
         if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/claude/mobile-platformer-apk-')
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.version.outputs.version }}-${{ github.run_number }}
-          name: Tiny Platformer v${{ steps.version.outputs.version }} (Build ${{ github.run_number }})
+          tag_name: v${{ steps.version_info.outputs.version }}-${{ github.run_number }}
+          name: Tiny Platformer v${{ steps.version_info.outputs.version }} (Build ${{ github.run_number }})
           draft: false
           prerelease: false
           files: android/app/build/outputs/apk/release/app-release.apk
           body: |
             ## 🎮 Tiny Platformer - Android APK
 
-            **Version:** ${{ steps.version.outputs.version }}
+            **Version:** ${{ steps.version_info.outputs.version }}
             **Build:** ${{ github.run_number }}
             **Branch:** ${{ github.ref_name }}
+            **Timestamp:** ${{ steps.version_info.outputs.timestamp }}
 
             ### 📥 Installation
             1. Téléchargez le fichier `app-release.apk`
