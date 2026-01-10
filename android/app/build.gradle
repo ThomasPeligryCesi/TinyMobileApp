@@ -41,6 +41,13 @@ android {
         pickFirst "lib/x86/libc++_shared.so"
         pickFirst "lib/x86_64/libc++_shared.so"
     }
+
+    sourceSets {
+        main {
+            assets.srcDirs = ['src/main/assets', "$buildDir/generated/assets/react/release"]
+            res.srcDirs = ['src/main/res', "$buildDir/generated/res/react/release"]
+        }
+    }
 }
 
 dependencies {
@@ -50,4 +57,35 @@ dependencies {
     implementation "com.facebook.react:hermes-android:0.73.2"
 
     implementation "androidx.swiperefreshlayout:swiperefreshlayout:1.1.0"
+}
+
+// Task to bundle JavaScript and assets for release builds
+task bundleReleaseJsAndAssets(type: Exec) {
+    description = "Bundle React Native JS and assets for release"
+
+    def jsBundleDir = "$buildDir/generated/assets/react/release"
+    def resourcesDir = "$buildDir/generated/res/react/release"
+    def jsBundleFile = "$jsBundleDir/index.android.bundle"
+
+    doFirst {
+        // Create directories
+        file(jsBundleDir).mkdirs()
+        file(resourcesDir).mkdirs()
+    }
+
+    workingDir rootProject.projectDir.parent
+
+    commandLine "npx", "react-native", "bundle",
+        "--platform", "android",
+        "--dev", "false",
+        "--entry-file", "index.js",
+        "--bundle-output", jsBundleFile,
+        "--assets-dest", resourcesDir
+}
+
+// Make sure the bundle task runs before merging assets
+tasks.whenTaskAdded { task ->
+    if (task.name == 'mergeReleaseAssets') {
+        task.dependsOn bundleReleaseJsAndAssets
+    }
 }
