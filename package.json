@@ -5,7 +5,8 @@
   "scripts": {
     "android": "react-native run-android",
     "start": "react-native start",
-    "test": "jest"
+    "test": "jest",
+    "postinstall": "bash scripts/postinstall.sh"
   },
   "dependencies": {
     "@shopify/react-native-skia": "^0.1.240",
