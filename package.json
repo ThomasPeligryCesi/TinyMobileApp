@@ -8,7 +8,6 @@
     "test": "jest"
   },
   "dependencies": {
-    "@shopify/react-native-skia": "^0.1.221",
     "react": "18.2.0",
     "react-native": "0.73.2"
   },
