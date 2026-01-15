@@ -4,6 +4,7 @@
 
 SKIA_BUILD_FILE="node_modules/@shopify/react-native-skia/android/build.gradle"
 SKIA_REANIMATED_DIR="node_modules/@shopify/react-native-skia/src/external/reanimated"
+SKIA_REANIMATED_FILE="$SKIA_REANIMATED_DIR/index.ts"
 
 if [ -f "$SKIA_BUILD_FILE" ]; then
   echo "Patching Skia build.gradle to fix React Native dependency resolution..."
@@ -17,9 +18,11 @@ else
 fi
 
 # Create empty reanimated stub to prevent Metro errors
-if [ -d "$SKIA_REANIMATED_DIR" ]; then
-  echo "Creating empty reanimated stub..."
-  echo "// Stub for optional reanimated dependency" > "$SKIA_REANIMATED_DIR/index.ts"
-  echo "export {};" >> "$SKIA_REANIMATED_DIR/index.ts"
-  echo "Reanimated stub created successfully!"
-fi
+echo "Creating empty reanimated stub..."
+mkdir -p "$SKIA_REANIMATED_DIR"
+cat > "$SKIA_REANIMATED_FILE" << 'EOF'
+// Stub for optional reanimated dependency
+export {};
+EOF
+echo "Reanimated stub created successfully!"
+
