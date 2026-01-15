@@ -46,12 +46,20 @@ class App extends Component {
       shield: false,
       magnet: false,
       showHelp: false,
+      showFPS: false,
+      fps: 0,
     };
     this.gameLoop = null;
     this.leftPressed = false;
     this.rightPressed = false;
     this.shieldTimeout = null;
     this.magnetTimeout = null;
+
+    // FPS tracking
+    this.frameCount = 0;
+    this.lastFpsUpdate = Date.now();
+    this.lastFrameTime = Date.now();
+    this.targetFrameTime = 1000 / 90; // 90 FPS target
   }
 
   componentDidMount() {
@@ -139,10 +147,23 @@ class App extends Component {
 
   startGameLoop = () => {
     const update = () => {
+      const now = Date.now();
+      const deltaTime = now - this.lastFrameTime;
+
+      // Calculate FPS
+      this.frameCount++;
+      if (now - this.lastFpsUpdate >= 1000) {
+        this.setState({fps: this.frameCount});
+        this.frameCount = 0;
+        this.lastFpsUpdate = now;
+      }
+
       if (!this.state.gameOver && !this.state.paused) {
         this.updateGame();
+        this.lastFrameTime = now;
         this.gameLoop = requestAnimationFrame(update);
       } else if (!this.state.gameOver) {
+        this.lastFrameTime = now;
         this.gameLoop = requestAnimationFrame(update);
       }
     };
@@ -154,86 +175,98 @@ class App extends Component {
       this.state;
 
     // Appliquer les contrôles
-    if (this.leftPressed) {
-      velocityX = -MOVE_SPEED;
-    } else if (this.rightPressed) {
-      velocityX = MOVE_SPEED;
-    } else {
-      velocityX = 0;
-    }
+    velocityX = this.leftPressed ? -MOVE_SPEED : this.rightPressed ? MOVE_SPEED : 0;
 
     // Appliquer la physique
     velocityY += GRAVITY;
     playerX += velocityX;
     playerY += velocityY;
 
-    // Wrap autour de l'écran (gauche-droite)
-    if (playerX < -PLAYER_SIZE) {
-      playerX = SCREEN_WIDTH;
-    } else if (playerX > SCREEN_WIDTH) {
-      playerX = -PLAYER_SIZE;
-    }
+    // Wrap autour de l'écran (gauche-droite) - optimisé
+    if (playerX < -PLAYER_SIZE) playerX = SCREEN_WIDTH;
+    else if (playerX > SCREEN_WIDTH) playerX = -PLAYER_SIZE;
 
-    // Vérifier les collisions avec les bonus
-    bonuses.forEach(bonus => {
-      if (bonus.collected) return;
+    // Précalculer les valeurs communes pour les collisions
+    const playerCenterX = playerX + PLAYER_SIZE / 2;
+    const playerCenterY = playerY + PLAYER_SIZE / 2;
+    const collisionRadius = (PLAYER_SIZE + BONUS_SIZE) / 2;
+
+    // Flags pour les mises à jour de power-ups
+    let newShield = shield;
+    let newMagnet = magnet;
+
+    // Vérifier les collisions avec les bonus (optimisé)
+    const bonusLength = bonuses.length;
+    for (let i = 0; i < bonusLength; i++) {
+      const bonus = bonuses[i];
+      if (bonus.collected) continue;
 
       const bonusScreenY = bonus.y - cameraY;
-      const distance = Math.sqrt(
-        Math.pow(playerX + PLAYER_SIZE / 2 - (bonus.x + BONUS_SIZE / 2), 2) +
-        Math.pow(playerY + PLAYER_SIZE / 2 - bonusScreenY, 2)
-      );
+      const bonusCenterX = bonus.x + BONUS_SIZE / 2;
+      const bonusCenterY = bonusScreenY;
+
+      // Calcul de distance optimisé (sans racine carrée pour le test initial)
+      const dx = playerCenterX - bonusCenterX;
+      const dy = playerCenterY - bonusCenterY;
+      const distanceSquared = dx * dx + dy * dy;
 
       // Effet aimant : attirer les bonus proches
-      if (magnet && distance < 100 && !bonus.collected) {
-        const dx = (playerX + PLAYER_SIZE / 2) - (bonus.x + BONUS_SIZE / 2);
-        const dy = (playerY + PLAYER_SIZE / 2) - bonusScreenY;
+      if (magnet && distanceSquared < 10000) { // 100 * 100
         bonus.x += dx * 0.1;
         bonus.y += (dy + cameraY - bonus.y) * 0.1;
       }
 
-      // Collision avec le bonus
-      if (distance < (PLAYER_SIZE + BONUS_SIZE) / 2) {
+      // Collision avec le bonus (sans sqrt pour meilleure performance)
+      if (distanceSquared < collisionRadius * collisionRadius) {
         bonus.collected = true;
         score += bonus.type.points;
 
         // Appliquer les effets spéciaux
-        if (bonus.type.id === 'spring') {
-          velocityY = bonus.type.boost;
-        } else if (bonus.type.id === 'shield') {
-          this.setState({shield: true});
-          if (this.shieldTimeout) clearTimeout(this.shieldTimeout);
-          this.shieldTimeout = setTimeout(() => {
-            this.setState({shield: false});
-          }, bonus.type.duration);
-        } else if (bonus.type.id === 'magnet') {
-          this.setState({magnet: true});
-          if (this.magnetTimeout) clearTimeout(this.magnetTimeout);
-          this.magnetTimeout = setTimeout(() => {
-            this.setState({magnet: false});
-          }, bonus.type.duration);
+        switch (bonus.type.id) {
+          case 'spring':
+            velocityY = bonus.type.boost;
+            break;
+          case 'shield':
+            newShield = true;
+            if (this.shieldTimeout) clearTimeout(this.shieldTimeout);
+            this.shieldTimeout = setTimeout(() => {
+              this.setState({shield: false});
+            }, bonus.type.duration);
+            break;
+          case 'magnet':
+            newMagnet = true;
+            if (this.magnetTimeout) clearTimeout(this.magnetTimeout);
+            this.magnetTimeout = setTimeout(() => {
+              this.setState({magnet: false});
+            }, bonus.type.duration);
+            break;
         }
       }
-    });
+    }
 
-    // Supprimer les bonus collectés
+    // Supprimer les bonus collectés (optimisé avec filter)
     bonuses = bonuses.filter(b => !b.collected && b.y - cameraY < SCREEN_HEIGHT + 100);
 
-    // Vérifier les collisions avec les plateformes
+    // Vérifier les collisions avec les plateformes (optimisé)
     if (velocityY > 0) {
-      platforms.forEach(platform => {
-        const playerBottom = playerY + PLAYER_SIZE;
+      const playerBottom = playerY + PLAYER_SIZE;
+      const playerRight = playerX + PLAYER_SIZE;
+
+      for (let i = 0, len = platforms.length; i < len; i++) {
+        const platform = platforms[i];
         const platformTop = platform.y - cameraY;
+        const platformRight = platform.x + platform.width;
 
         if (
           playerBottom >= platformTop &&
           playerBottom <= platformTop + PLATFORM_HEIGHT + 10 &&
-          playerX + PLAYER_SIZE > platform.x &&
-          playerX < platform.x + platform.width
+          playerRight > platform.x &&
+          playerX < platformRight
         ) {
           velocityY = JUMP_FORCE;
+          break; // Sortir dès qu'on touche une plateforme
         }
-      });
+      }
     }
 
     // Déplacer la caméra vers le haut quand le joueur monte
@@ -246,12 +279,16 @@ class App extends Component {
       const currentScore = Math.floor(Math.abs(cameraY) / 10);
       score = Math.max(score, currentScore);
 
-      // Générer de nouvelles plateformes
-      const highestPlatform = platforms.reduce((min, p) =>
-        p.y < min.y ? p : min,
-      );
-      if (highestPlatform.y - cameraY > -SCREEN_HEIGHT) {
-        const newPlatform = this.generatePlatform(highestPlatform.y);
+      // Générer de nouvelles plateformes (optimisé avec boucle simple)
+      let highestY = platforms[0].y;
+      for (let i = 1, len = platforms.length; i < len; i++) {
+        if (platforms[i].y < highestY) {
+          highestY = platforms[i].y;
+        }
+      }
+
+      if (highestY - cameraY > -SCREEN_HEIGHT) {
+        const newPlatform = this.generatePlatform(highestY);
         platforms.push(newPlatform);
 
         // 30% de chance de générer un bonus
@@ -265,7 +302,7 @@ class App extends Component {
     }
 
     // Game Over si le joueur tombe en bas de l'écran (sauf si bouclier actif)
-    if (playerY > SCREEN_HEIGHT && !shield) {
+    if (playerY > SCREEN_HEIGHT && !newShield) {
       this.setState({
         gameOver: true,
         highScore: Math.max(this.state.highScore, score),
@@ -274,11 +311,11 @@ class App extends Component {
         cancelAnimationFrame(this.gameLoop);
       }
       return;
-    } else if (playerY > SCREEN_HEIGHT && shield) {
+    } else if (playerY > SCREEN_HEIGHT && newShield) {
       // Le bouclier sauve le joueur une fois
       playerY = SCREEN_HEIGHT - 100;
       velocityY = JUMP_FORCE * 1.5;
-      this.setState({shield: false});
+      newShield = false;
       if (this.shieldTimeout) clearTimeout(this.shieldTimeout);
     }
 
@@ -291,6 +328,8 @@ class App extends Component {
       bonuses,
       score,
       cameraY,
+      shield: newShield,
+      magnet: newMagnet,
     });
   };
 
@@ -316,6 +355,10 @@ class App extends Component {
 
   toggleHelp = () => {
     this.setState({showHelp: !this.state.showHelp});
+  };
+
+  toggleFPS = () => {
+    this.setState({showFPS: !this.state.showFPS});
   };
 
   renderPlayer = () => {
@@ -368,6 +411,8 @@ class App extends Component {
       shield,
       magnet,
       showHelp,
+      showFPS,
+      fps,
     } = this.state;
 
     // Effet parallaxe
@@ -405,6 +450,13 @@ class App extends Component {
           {shield && <Text style={styles.powerUpText}>🛡️ SHIELD</Text>}
           {magnet && <Text style={styles.powerUpText}>🧲 MAGNET</Text>}
         </View>
+
+        {/* FPS Counter */}
+        {showFPS && (
+          <View style={styles.fpsContainer}>
+            <Text style={styles.fpsText}>{fps} FPS</Text>
+          </View>
+        )}
 
         {/* Bouton pause */}
         <TouchableOpacity style={styles.pauseButton} onPress={this.togglePause}>
@@ -454,6 +506,11 @@ class App extends Component {
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuButton} onPress={this.toggleHelp}>
               <Text style={styles.menuButtonText}>Aide</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuButton} onPress={this.toggleFPS}>
+              <Text style={styles.menuButtonText}>
+                {showFPS ? '✓ ' : ''}Afficher FPS
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuButton} onPress={this.initGame}>
               <Text style={styles.menuButtonText}>Recommencer</Text>
@@ -672,6 +729,22 @@ const styles = StyleSheet.create({
   pauseText: {
     fontSize: 24,
     color: '#333',
+  },
+  fpsContainer: {
+    position: 'absolute',
+    top: 40,
+    left: 20,
+    zIndex: 11,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 5,
+  },
+  fpsText: {
+    fontSize: 12,
+    color: '#00FF00',
+    fontWeight: 'bold',
+    fontFamily: 'monospace',
   },
   gameArea: {
     flex: 1,
