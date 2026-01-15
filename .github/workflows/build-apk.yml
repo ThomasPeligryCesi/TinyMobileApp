@@ -29,6 +29,10 @@ jobs:
         with:
           node-version: '18'
           cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Clean node_modules
+        run: rm -rf node_modules
 
       - name: Install dependencies
         run: npm ci
@@ -45,6 +49,11 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x android/gradlew
+
+      - name: Clean Gradle cache
+        run: |
+          cd android
+          ./gradlew clean --no-daemon || echo "Clean failed, continuing..."
 
       - name: Build Release APK
         run: |
