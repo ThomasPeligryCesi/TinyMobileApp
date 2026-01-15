@@ -1,4 +1,4 @@
-import React, {Component} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {
   StyleSheet,
   View,
@@ -9,6 +9,7 @@ import {
   ScrollView,
   Modal,
 } from 'react-native';
+import {Canvas, Group, Rect, Circle, useFrameCallback, Skia, Text as SkiaText, matchFont} from '@shopify/react-native-skia';
 
 const {width: SCREEN_WIDTH, height: SCREEN_HEIGHT} = Dimensions.get('window');
 
@@ -28,53 +29,44 @@ const BONUS_TYPES = {
   MAGNET: {id: 'magnet', color: '#95E1D3', points: 5, duration: 3000, icon: '🧲'},
 };
 
-class App extends Component {
-  constructor(props) {
-    super(props);
-    this.state = {
-      playerX: SCREEN_WIDTH / 2 - PLAYER_SIZE / 2,
-      playerY: SCREEN_HEIGHT - 200,
-      velocityY: 0,
-      velocityX: 0,
-      platforms: [],
-      bonuses: [],
-      score: 0,
-      highScore: 0,
-      gameOver: false,
-      paused: false,
-      cameraY: 0,
-      shield: false,
-      magnet: false,
-      showHelp: false,
-      showFPS: false,
-      fps: 0,
-    };
-    this.gameLoop = null;
-    this.leftPressed = false;
-    this.rightPressed = false;
-    this.shieldTimeout = null;
-    this.magnetTimeout = null;
+const App = () => {
+  const [paused, setPaused] = useState(false);
+  const [gameOver, setGameOver] = useState(false);
+  const [score, setScore] = useState(0);
+  const [highScore, setHighScore] = useState(0);
+  const [shield, setShield] = useState(false);
+  const [magnet, setMagnet] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [showFPS, setShowFPS] = useState(false);
+  const [fps, setFps] = useState(0);
 
-    // FPS tracking
-    this.frameCount = 0;
-    this.lastFpsUpdate = Date.now();
-    this.lastFrameTime = Date.now();
-    this.targetFrameTime = 1000 / 90; // 90 FPS target
-  }
+  // Refs pour le state du jeu (pas de re-render nécessaire)
+  const gameState = useRef({
+    playerX: SCREEN_WIDTH / 2 - PLAYER_SIZE / 2,
+    playerY: SCREEN_HEIGHT - 200,
+    velocityY: 0,
+    velocityX: 0,
+    platforms: [],
+    bonuses: [],
+    cameraY: 0,
+    leftPressed: false,
+    rightPressed: false,
+    shield: false,
+    magnet: false,
+    shieldTimeout: null,
+    magnetTimeout: null,
+    frameCount: 0,
+    lastFpsUpdate: Date.now(),
+    currentScore: 0,
+  });
 
-  componentDidMount() {
-    this.initGame();
-  }
+  const font = matchFont({
+    fontFamily: 'monospace',
+    fontSize: 12,
+    fontWeight: 'bold',
+  });
 
-  componentWillUnmount() {
-    if (this.gameLoop) {
-      cancelAnimationFrame(this.gameLoop);
-    }
-    if (this.shieldTimeout) clearTimeout(this.shieldTimeout);
-    if (this.magnetTimeout) clearTimeout(this.magnetTimeout);
-  }
-
-  initGame = () => {
+  const initGame = useCallback(() => {
     const platforms = [];
     const bonuses = [];
 
@@ -88,598 +80,554 @@ class App extends Component {
 
     // Générer des plateformes initiales
     for (let i = 0; i < 8; i++) {
-      platforms.push(this.generatePlatform(platforms[platforms.length - 1].y));
+      const minGap = 60;
+      const maxGap = 120;
+      const gap = Math.random() * (maxGap - minGap) + minGap;
+      const lastY = platforms[platforms.length - 1].y;
+
+      platforms.push({
+        x: Math.random() * (SCREEN_WIDTH - PLATFORM_WIDTH),
+        y: lastY - gap,
+        width: PLATFORM_WIDTH,
+        height: PLATFORM_HEIGHT,
+      });
     }
 
     // Générer quelques bonus initiaux
     for (let i = 0; i < 5; i++) {
       if (Math.random() > 0.5) {
-        bonuses.push(this.generateBonus(platforms[i + 1].y));
+        const types = Object.values(BONUS_TYPES);
+        const type = types[Math.floor(Math.random() * types.length)];
+        bonuses.push({
+          x: Math.random() * (SCREEN_WIDTH - BONUS_SIZE),
+          y: platforms[i + 1].y - 50 - Math.random() * 30,
+          type,
+          collected: false,
+        });
       }
     }
 
-    this.setState({
+    gameState.current = {
       playerX: SCREEN_WIDTH / 2 - PLAYER_SIZE / 2,
       playerY: SCREEN_HEIGHT - 200,
       velocityY: 0,
       velocityX: 0,
       platforms,
       bonuses,
-      score: 0,
-      gameOver: false,
-      paused: false,
       cameraY: 0,
+      leftPressed: false,
+      rightPressed: false,
       shield: false,
       magnet: false,
-      showHelp: false,
-    });
-
-    if (this.shieldTimeout) clearTimeout(this.shieldTimeout);
-    if (this.magnetTimeout) clearTimeout(this.magnetTimeout);
-
-    this.startGameLoop();
-  };
-
-  generatePlatform = lastY => {
-    const minGap = 60;
-    const maxGap = 120;
-    const gap = Math.random() * (maxGap - minGap) + minGap;
-
-    return {
-      x: Math.random() * (SCREEN_WIDTH - PLATFORM_WIDTH),
-      y: lastY - gap,
-      width: PLATFORM_WIDTH,
-      height: PLATFORM_HEIGHT,
+      shieldTimeout: null,
+      magnetTimeout: null,
+      frameCount: 0,
+      lastFpsUpdate: Date.now(),
+      currentScore: 0,
     };
-  };
 
-  generateBonus = platformY => {
-    const types = Object.values(BONUS_TYPES);
-    const type = types[Math.floor(Math.random() * types.length)];
+    setGameOver(false);
+    setPaused(false);
+    setScore(0);
+    setShield(false);
+    setMagnet(false);
 
-    return {
-      x: Math.random() * (SCREEN_WIDTH - BONUS_SIZE),
-      y: platformY - 50 - Math.random() * 30,
-      type,
-      collected: false,
-    };
-  };
+    if (gameState.current.shieldTimeout) clearTimeout(gameState.current.shieldTimeout);
+    if (gameState.current.magnetTimeout) clearTimeout(gameState.current.magnetTimeout);
+  }, []);
 
-  startGameLoop = () => {
-    const update = () => {
-      const now = Date.now();
-      const deltaTime = now - this.lastFrameTime;
+  useEffect(() => {
+    initGame();
+  }, [initGame]);
 
-      // Calculate FPS
-      this.frameCount++;
-      if (now - this.lastFpsUpdate >= 1000) {
-        this.setState({fps: this.frameCount});
-        this.frameCount = 0;
-        this.lastFpsUpdate = now;
-      }
+  // Game loop optimisé avec Skia
+  useFrameCallback(() => {
+    if (gameOver || paused) return;
 
-      if (!this.state.gameOver && !this.state.paused) {
-        this.updateGame();
-        this.lastFrameTime = now;
-        this.gameLoop = requestAnimationFrame(update);
-      } else if (!this.state.gameOver) {
-        this.lastFrameTime = now;
-        this.gameLoop = requestAnimationFrame(update);
-      }
-    };
-    this.gameLoop = requestAnimationFrame(update);
-  };
+    const state = gameState.current;
+    const now = Date.now();
 
-  updateGame = () => {
-    let {playerX, playerY, velocityY, velocityX, platforms, bonuses, score, cameraY, magnet, shield} =
-      this.state;
+    // FPS tracking
+    state.frameCount++;
+    if (now - state.lastFpsUpdate >= 1000) {
+      setFps(state.frameCount);
+      state.frameCount = 0;
+      state.lastFpsUpdate = now;
+    }
 
     // Appliquer les contrôles
-    velocityX = this.leftPressed ? -MOVE_SPEED : this.rightPressed ? MOVE_SPEED : 0;
+    state.velocityX = state.leftPressed ? -MOVE_SPEED : state.rightPressed ? MOVE_SPEED : 0;
 
     // Appliquer la physique
-    velocityY += GRAVITY;
-    playerX += velocityX;
-    playerY += velocityY;
+    state.velocityY += GRAVITY;
+    state.playerX += state.velocityX;
+    state.playerY += state.velocityY;
 
-    // Wrap autour de l'écran (gauche-droite) - optimisé
-    if (playerX < -PLAYER_SIZE) playerX = SCREEN_WIDTH;
-    else if (playerX > SCREEN_WIDTH) playerX = -PLAYER_SIZE;
+    // Wrap autour de l'écran
+    if (state.playerX < -PLAYER_SIZE) state.playerX = SCREEN_WIDTH;
+    else if (state.playerX > SCREEN_WIDTH) state.playerX = -PLAYER_SIZE;
 
-    // Précalculer les valeurs communes pour les collisions
-    const playerCenterX = playerX + PLAYER_SIZE / 2;
-    const playerCenterY = playerY + PLAYER_SIZE / 2;
+    // Collision avec bonus
+    const playerCenterX = state.playerX + PLAYER_SIZE / 2;
+    const playerCenterY = state.playerY + PLAYER_SIZE / 2;
     const collisionRadius = (PLAYER_SIZE + BONUS_SIZE) / 2;
 
-    // Flags pour les mises à jour de power-ups
-    let newShield = shield;
-    let newMagnet = magnet;
-
-    // Vérifier les collisions avec les bonus (optimisé)
-    const bonusLength = bonuses.length;
-    for (let i = 0; i < bonusLength; i++) {
-      const bonus = bonuses[i];
+    for (let i = 0; i < state.bonuses.length; i++) {
+      const bonus = state.bonuses[i];
       if (bonus.collected) continue;
 
-      const bonusScreenY = bonus.y - cameraY;
+      const bonusScreenY = bonus.y - state.cameraY;
       const bonusCenterX = bonus.x + BONUS_SIZE / 2;
       const bonusCenterY = bonusScreenY;
 
-      // Calcul de distance optimisé (sans racine carrée pour le test initial)
       const dx = playerCenterX - bonusCenterX;
       const dy = playerCenterY - bonusCenterY;
       const distanceSquared = dx * dx + dy * dy;
 
-      // Effet aimant : attirer les bonus proches
-      if (magnet && distanceSquared < 10000) { // 100 * 100
+      // Effet aimant
+      if (state.magnet && distanceSquared < 10000) {
         bonus.x += dx * 0.1;
-        bonus.y += (dy + cameraY - bonus.y) * 0.1;
+        bonus.y += (dy + state.cameraY - bonus.y) * 0.1;
       }
 
-      // Collision avec le bonus (sans sqrt pour meilleure performance)
+      // Collision
       if (distanceSquared < collisionRadius * collisionRadius) {
         bonus.collected = true;
-        score += bonus.type.points;
+        state.currentScore += bonus.type.points;
 
-        // Appliquer les effets spéciaux
         switch (bonus.type.id) {
           case 'spring':
-            velocityY = bonus.type.boost;
+            state.velocityY = bonus.type.boost;
             break;
           case 'shield':
-            newShield = true;
-            if (this.shieldTimeout) clearTimeout(this.shieldTimeout);
-            this.shieldTimeout = setTimeout(() => {
-              this.setState({shield: false});
+            state.shield = true;
+            setShield(true);
+            if (state.shieldTimeout) clearTimeout(state.shieldTimeout);
+            state.shieldTimeout = setTimeout(() => {
+              state.shield = false;
+              setShield(false);
             }, bonus.type.duration);
             break;
           case 'magnet':
-            newMagnet = true;
-            if (this.magnetTimeout) clearTimeout(this.magnetTimeout);
-            this.magnetTimeout = setTimeout(() => {
-              this.setState({magnet: false});
+            state.magnet = true;
+            setMagnet(true);
+            if (state.magnetTimeout) clearTimeout(state.magnetTimeout);
+            state.magnetTimeout = setTimeout(() => {
+              state.magnet = false;
+              setMagnet(false);
             }, bonus.type.duration);
             break;
         }
       }
     }
 
-    // Supprimer les bonus collectés (optimisé avec filter)
-    bonuses = bonuses.filter(b => !b.collected && b.y - cameraY < SCREEN_HEIGHT + 100);
+    // Supprimer bonus collectés
+    state.bonuses = state.bonuses.filter(b => !b.collected && b.y - state.cameraY < SCREEN_HEIGHT + 100);
 
-    // Vérifier les collisions avec les plateformes (optimisé)
-    if (velocityY > 0) {
-      const playerBottom = playerY + PLAYER_SIZE;
-      const playerRight = playerX + PLAYER_SIZE;
+    // Collision avec plateformes
+    if (state.velocityY > 0) {
+      const playerBottom = state.playerY + PLAYER_SIZE;
+      const playerRight = state.playerX + PLAYER_SIZE;
 
-      for (let i = 0, len = platforms.length; i < len; i++) {
-        const platform = platforms[i];
-        const platformTop = platform.y - cameraY;
+      for (let i = 0; i < state.platforms.length; i++) {
+        const platform = state.platforms[i];
+        const platformTop = platform.y - state.cameraY;
         const platformRight = platform.x + platform.width;
 
         if (
           playerBottom >= platformTop &&
           playerBottom <= platformTop + PLATFORM_HEIGHT + 10 &&
           playerRight > platform.x &&
-          playerX < platformRight
+          state.playerX < platformRight
         ) {
-          velocityY = JUMP_FORCE;
-          break; // Sortir dès qu'on touche une plateforme
+          state.velocityY = JUMP_FORCE;
+          break;
         }
       }
     }
 
-    // Déplacer la caméra vers le haut quand le joueur monte
-    if (playerY < SCREEN_HEIGHT / 3) {
-      const diff = SCREEN_HEIGHT / 3 - playerY;
-      cameraY -= diff;
-      playerY = SCREEN_HEIGHT / 3;
+    // Déplacer la caméra
+    if (state.playerY < SCREEN_HEIGHT / 3) {
+      const diff = SCREEN_HEIGHT / 3 - state.playerY;
+      state.cameraY -= diff;
+      state.playerY = SCREEN_HEIGHT / 3;
 
-      // Calculer le score basé sur la hauteur atteinte
-      const currentScore = Math.floor(Math.abs(cameraY) / 10);
-      score = Math.max(score, currentScore);
+      // Calculer le score
+      const currentScore = Math.floor(Math.abs(state.cameraY) / 10);
+      state.currentScore = Math.max(state.currentScore, currentScore);
+      setScore(state.currentScore);
 
-      // Générer de nouvelles plateformes (optimisé avec boucle simple)
-      let highestY = platforms[0].y;
-      for (let i = 1, len = platforms.length; i < len; i++) {
-        if (platforms[i].y < highestY) {
-          highestY = platforms[i].y;
+      // Générer nouvelles plateformes
+      let highestY = state.platforms[0].y;
+      for (let i = 1; i < state.platforms.length; i++) {
+        if (state.platforms[i].y < highestY) {
+          highestY = state.platforms[i].y;
         }
       }
 
-      if (highestY - cameraY > -SCREEN_HEIGHT) {
-        const newPlatform = this.generatePlatform(highestY);
-        platforms.push(newPlatform);
+      if (highestY - state.cameraY > -SCREEN_HEIGHT) {
+        const minGap = 60;
+        const maxGap = 120;
+        const gap = Math.random() * (maxGap - minGap) + minGap;
+
+        state.platforms.push({
+          x: Math.random() * (SCREEN_WIDTH - PLATFORM_WIDTH),
+          y: highestY - gap,
+          width: PLATFORM_WIDTH,
+          height: PLATFORM_HEIGHT,
+        });
 
         // 30% de chance de générer un bonus
         if (Math.random() > 0.7) {
-          bonuses.push(this.generateBonus(newPlatform.y));
+          const types = Object.values(BONUS_TYPES);
+          const type = types[Math.floor(Math.random() * types.length)];
+          state.bonuses.push({
+            x: Math.random() * (SCREEN_WIDTH - BONUS_SIZE),
+            y: highestY - gap - 50 - Math.random() * 30,
+            type,
+            collected: false,
+          });
         }
       }
 
-      // Supprimer les plateformes hors de l'écran
-      platforms = platforms.filter(p => p.y - cameraY < SCREEN_HEIGHT + 100);
+      // Supprimer plateformes hors écran
+      state.platforms = state.platforms.filter(p => p.y - state.cameraY < SCREEN_HEIGHT + 100);
     }
 
-    // Game Over si le joueur tombe en bas de l'écran (sauf si bouclier actif)
-    if (playerY > SCREEN_HEIGHT && !newShield) {
-      this.setState({
-        gameOver: true,
-        highScore: Math.max(this.state.highScore, score),
-      });
-      if (this.gameLoop) {
-        cancelAnimationFrame(this.gameLoop);
-      }
-      return;
-    } else if (playerY > SCREEN_HEIGHT && newShield) {
-      // Le bouclier sauve le joueur une fois
-      playerY = SCREEN_HEIGHT - 100;
-      velocityY = JUMP_FORCE * 1.5;
-      newShield = false;
-      if (this.shieldTimeout) clearTimeout(this.shieldTimeout);
+    // Game Over
+    if (state.playerY > SCREEN_HEIGHT && !state.shield) {
+      setGameOver(true);
+      setHighScore(Math.max(highScore, state.currentScore));
+    } else if (state.playerY > SCREEN_HEIGHT && state.shield) {
+      state.playerY = SCREEN_HEIGHT - 100;
+      state.velocityY = JUMP_FORCE * 1.5;
+      state.shield = false;
+      setShield(false);
+      if (state.shieldTimeout) clearTimeout(state.shieldTimeout);
     }
+  });
 
-    this.setState({
-      playerX,
-      playerY,
-      velocityY,
-      velocityX,
-      platforms,
-      bonuses,
-      score,
-      cameraY,
-      shield: newShield,
-      magnet: newMagnet,
-    });
+  const handleLeftPressIn = () => {
+    gameState.current.leftPressed = true;
   };
 
-  handleLeftPressIn = () => {
-    this.leftPressed = true;
+  const handleLeftPressOut = () => {
+    gameState.current.leftPressed = false;
   };
 
-  handleLeftPressOut = () => {
-    this.leftPressed = false;
+  const handleRightPressIn = () => {
+    gameState.current.rightPressed = true;
   };
 
-  handleRightPressIn = () => {
-    this.rightPressed = true;
+  const handleRightPressOut = () => {
+    gameState.current.rightPressed = false;
   };
 
-  handleRightPressOut = () => {
-    this.rightPressed = false;
+  const togglePause = () => {
+    setPaused(!paused);
   };
 
-  togglePause = () => {
-    this.setState({paused: !this.state.paused});
+  const toggleHelp = () => {
+    setShowHelp(!showHelp);
   };
 
-  toggleHelp = () => {
-    this.setState({showHelp: !this.state.showHelp});
+  const toggleFPS = () => {
+    setShowFPS(!showFPS);
   };
 
-  toggleFPS = () => {
-    this.setState({showFPS: !this.state.showFPS});
-  };
+  // Parallax offsets
+  const parallaxOffset1 = (gameState.current.cameraY * 0.1) % SCREEN_HEIGHT;
+  const parallaxOffset2 = (gameState.current.cameraY * 0.3) % SCREEN_HEIGHT;
 
-  renderPlayer = () => {
-    const {shield} = this.state;
-    return (
-      <View style={styles.creature}>
-        {/* Corps de la créature */}
-        <View style={[styles.creatureBody, shield && styles.creatureBodyShield]} />
-        {/* Yeux */}
-        <View style={styles.creatureEyes}>
-          <View style={styles.creatureEye} />
-          <View style={styles.creatureEye} />
-        </View>
-        {/* Bouche */}
-        <View style={styles.creatureMouth} />
-        {/* Effet bouclier */}
-        {shield && <View style={styles.shieldEffect} />}
-      </View>
-    );
-  };
+  return (
+    <View style={styles.container}>
+      <StatusBar hidden />
 
-  renderBonus = (bonus, index) => {
-    return (
-      <View
-        key={index}
-        style={[
-          styles.bonus,
-          {
-            left: bonus.x,
-            top: bonus.y - this.state.cameraY,
-            backgroundColor: bonus.type.color,
-          },
-        ]}>
-        <Text style={styles.bonusIcon}>{bonus.type.icon}</Text>
-      </View>
-    );
-  };
-
-  render() {
-    const {
-      playerX,
-      playerY,
-      platforms,
-      bonuses,
-      score,
-      highScore,
-      gameOver,
-      paused,
-      cameraY,
-      shield,
-      magnet,
-      showHelp,
-      showFPS,
-      fps,
-    } = this.state;
-
-    // Effet parallaxe
-    const parallaxOffset1 = (cameraY * 0.1) % SCREEN_HEIGHT;
-    const parallaxOffset2 = (cameraY * 0.3) % SCREEN_HEIGHT;
-    const parallaxOffset3 = (cameraY * 0.5) % SCREEN_HEIGHT;
-
-    return (
-      <View style={styles.container}>
-        <StatusBar hidden />
-
+      {/* Canvas de rendu Skia - haute performance */}
+      <Canvas style={styles.canvas}>
         {/* Arrière-plan avec parallaxe */}
-        <View style={styles.parallaxContainer}>
-          {/* Couche 1 - Fond lointain */}
-          <View style={[styles.parallaxLayer1, {transform: [{translateY: parallaxOffset1}]}]}>
-            <View style={styles.mountain1} />
-            <View style={styles.mountain2} />
-          </View>
+        <Group>
+          {/* Couche 1 - Fond */}
+          <Rect x={0} y={0} width={SCREEN_WIDTH} height={SCREEN_HEIGHT} color="#87CEEB" />
 
-          {/* Couche 2 - Nuages */}
-          <View style={[styles.parallaxLayer2, {transform: [{translateY: parallaxOffset2}]}]}>
-            <View style={[styles.cloud, {left: '10%', top: '20%'}]} />
-            <View style={[styles.cloud, {left: '60%', top: '40%'}]} />
-            <View style={[styles.cloud, {left: '30%', top: '70%'}]} />
-          </View>
+          {/* Montagnes */}
+          <Group transform={[{translateY: parallaxOffset1}]}>
+            <Rect x={SCREEN_WIDTH * 0.1} y={SCREEN_HEIGHT - 150} width={200} height={150} color="rgba(90, 159, 212, 0.6)" />
+            <Rect x={SCREEN_WIDTH * 0.6} y={SCREEN_HEIGHT - 120} width={180} height={120} color="rgba(107, 177, 224, 0.5)" />
+          </Group>
 
-          {/* Couche 3 - Avant-plan */}
-          <View style={[styles.parallaxLayer3, {transform: [{translateY: parallaxOffset3}]}]} />
-        </View>
+          {/* Nuages */}
+          <Group transform={[{translateY: parallaxOffset2}]}>
+            <Circle cx={SCREEN_WIDTH * 0.15} cy={SCREEN_HEIGHT * 0.2} r={40} color="rgba(255, 255, 255, 0.6)" />
+            <Circle cx={SCREEN_WIDTH * 0.65} cy={SCREEN_HEIGHT * 0.4} r={40} color="rgba(255, 255, 255, 0.6)" />
+            <Circle cx={SCREEN_WIDTH * 0.35} cy={SCREEN_HEIGHT * 0.7} r={40} color="rgba(255, 255, 255, 0.6)" />
+          </Group>
+        </Group>
 
-        {/* Score et indicateurs */}
-        <View style={styles.scoreContainer}>
-          <Text style={styles.scoreText}>Score: {score}</Text>
-          <Text style={styles.highScoreText}>High: {highScore}</Text>
-          {shield && <Text style={styles.powerUpText}>🛡️ SHIELD</Text>}
-          {magnet && <Text style={styles.powerUpText}>🧲 MAGNET</Text>}
-        </View>
+        {/* Plateformes */}
+        {gameState.current.platforms.map((platform, index) => {
+          const screenY = platform.y - gameState.current.cameraY;
+          if (screenY < -50 || screenY > SCREEN_HEIGHT + 50) return null;
+          return (
+            <Group key={index}>
+              <Rect
+                x={platform.x}
+                y={screenY}
+                width={platform.width}
+                height={platform.height}
+                color="#51CF66"
+              />
+              <Rect
+                x={platform.x}
+                y={screenY}
+                width={platform.width}
+                height={platform.height}
+                color="transparent"
+                style="stroke"
+                strokeWidth={2}
+                strokeCap="round"
+                strokeJoin="round"
+              />
+            </Group>
+          );
+        })}
 
-        {/* FPS Counter */}
-        {showFPS && (
-          <View style={styles.fpsContainer}>
-            <Text style={styles.fpsText}>{fps} FPS</Text>
-          </View>
-        )}
+        {/* Bonus */}
+        {gameState.current.bonuses.map((bonus, index) => {
+          const screenY = bonus.y - gameState.current.cameraY;
+          if (screenY < -50 || screenY > SCREEN_HEIGHT + 50) return null;
+          return (
+            <Group key={index}>
+              <Circle
+                cx={bonus.x + BONUS_SIZE / 2}
+                cy={screenY}
+                r={BONUS_SIZE / 2}
+                color={bonus.type.color}
+              />
+              <Circle
+                cx={bonus.x + BONUS_SIZE / 2}
+                cy={screenY}
+                r={BONUS_SIZE / 2}
+                color="transparent"
+                style="stroke"
+                strokeWidth={2}
+              />
+            </Group>
+          );
+        })}
 
-        {/* Bouton pause */}
-        <TouchableOpacity style={styles.pauseButton} onPress={this.togglePause}>
-          <Text style={styles.pauseText}>{paused ? '▶' : '⏸'}</Text>
-        </TouchableOpacity>
-
-        {/* Zone de jeu */}
-        <View style={styles.gameArea}>
-          {/* Plateformes */}
-          {platforms.map((platform, index) => (
-            <View
-              key={index}
-              style={[
-                styles.platform,
-                {
-                  left: platform.x,
-                  top: platform.y - cameraY,
-                  width: platform.width,
-                  height: platform.height,
-                },
-              ]}
+        {/* Joueur (créature) */}
+        <Group>
+          {/* Corps */}
+          <Circle
+            cx={gameState.current.playerX + PLAYER_SIZE / 2}
+            cy={gameState.current.playerY + PLAYER_SIZE / 2}
+            r={PLAYER_SIZE / 2}
+            color="#FF6B6B"
+          />
+          {/* Bordure */}
+          <Circle
+            cx={gameState.current.playerX + PLAYER_SIZE / 2}
+            cy={gameState.current.playerY + PLAYER_SIZE / 2}
+            r={PLAYER_SIZE / 2}
+            color="transparent"
+            style="stroke"
+            strokeWidth={shield ? 4 : 3}
+            strokeCap="round"
+            strokeJoin="round"
+          />
+          {/* Yeux */}
+          <Circle
+            cx={gameState.current.playerX + 15}
+            cy={gameState.current.playerY + 12}
+            r={4}
+            color="#FFF"
+          />
+          <Circle
+            cx={gameState.current.playerX + 25}
+            cy={gameState.current.playerY + 12}
+            r={4}
+            color="#FFF"
+          />
+          {/* Pupilles */}
+          <Circle
+            cx={gameState.current.playerX + 15}
+            cy={gameState.current.playerY + 12}
+            r={2}
+            color="#000"
+          />
+          <Circle
+            cx={gameState.current.playerX + 25}
+            cy={gameState.current.playerY + 12}
+            r={2}
+            color="#000"
+          />
+          {/* Bouclier effet */}
+          {shield && (
+            <Circle
+              cx={gameState.current.playerX + PLAYER_SIZE / 2}
+              cy={gameState.current.playerY + PLAYER_SIZE / 2}
+              r={PLAYER_SIZE / 2 + 5}
+              color="transparent"
+              style="stroke"
+              strokeWidth={3}
+              opacity={0.5}
             />
-          ))}
+          )}
+        </Group>
+      </Canvas>
 
-          {/* Bonus */}
-          {bonuses.map((bonus, index) => this.renderBonus(bonus, index))}
-
-          {/* Joueur (créature) */}
-          <View
-            style={[
-              styles.player,
-              {
-                left: playerX,
-                top: playerY,
-              },
-            ]}>
-            {this.renderPlayer()}
-          </View>
-        </View>
-
-        {/* Menu Pause */}
-        {paused && !gameOver && (
-          <View style={styles.pauseMenu}>
-            <Text style={styles.pauseMenuTitle}>PAUSE</Text>
-            <TouchableOpacity style={styles.menuButton} onPress={this.togglePause}>
-              <Text style={styles.menuButtonText}>Reprendre</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuButton} onPress={this.toggleHelp}>
-              <Text style={styles.menuButtonText}>Aide</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuButton} onPress={this.toggleFPS}>
-              <Text style={styles.menuButtonText}>
-                {showFPS ? '✓ ' : ''}Afficher FPS
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.menuButton} onPress={this.initGame}>
-              <Text style={styles.menuButtonText}>Recommencer</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Modal Aide */}
-        <Modal
-          visible={showHelp}
-          transparent={true}
-          animationType="fade"
-          onRequestClose={this.toggleHelp}>
-          <View style={styles.helpModal}>
-            <View style={styles.helpContainer}>
-              <Text style={styles.helpTitle}>🎮 AIDE</Text>
-              <ScrollView style={styles.helpScroll}>
-                <Text style={styles.helpSection}>📋 Objectif</Text>
-                <Text style={styles.helpText}>
-                  Montez le plus haut possible en sautant de plateforme en plateforme !
-                </Text>
-
-                <Text style={styles.helpSection}>🎁 Bonus</Text>
-
-                <View style={styles.bonusHelpItem}>
-                  <Text style={styles.bonusHelpIcon}>⭐</Text>
-                  <View style={styles.bonusHelpInfo}>
-                    <Text style={styles.bonusHelpName}>Étoile</Text>
-                    <Text style={styles.bonusHelpDesc}>+10 points bonus</Text>
-                  </View>
-                </View>
-
-                <View style={styles.bonusHelpItem}>
-                  <Text style={styles.bonusHelpIcon}>🌸</Text>
-                  <View style={styles.bonusHelpInfo}>
-                    <Text style={styles.bonusHelpName}>Ressort</Text>
-                    <Text style={styles.bonusHelpDesc}>+5 points • Super saut vers le haut</Text>
-                  </View>
-                </View>
-
-                <View style={styles.bonusHelpItem}>
-                  <Text style={styles.bonusHelpIcon}>🛡️</Text>
-                  <View style={styles.bonusHelpInfo}>
-                    <Text style={styles.bonusHelpName}>Bouclier</Text>
-                    <Text style={styles.bonusHelpDesc}>+15 points • Protection contre 1 chute (5s)</Text>
-                  </View>
-                </View>
-
-                <View style={styles.bonusHelpItem}>
-                  <Text style={styles.bonusHelpIcon}>🧲</Text>
-                  <View style={styles.bonusHelpInfo}>
-                    <Text style={styles.bonusHelpName}>Aimant</Text>
-                    <Text style={styles.bonusHelpDesc}>+5 points • Attire les bonus proches (3s)</Text>
-                  </View>
-                </View>
-
-                <Text style={styles.helpSection}>🕹️ Contrôles</Text>
-                <Text style={styles.helpText}>
-                  • Boutons ← → : Déplacer la créature{'\n'}
-                  • Bouton ⏸ : Pause{'\n'}
-                  • Le personnage saute automatiquement sur les plateformes
-                </Text>
-
-                <Text style={styles.helpSection}>💡 Astuces</Text>
-                <Text style={styles.helpText}>
-                  • Collectez les bonus pour booster votre score{'\n'}
-                  • Le bouclier vous sauve d'une chute fatale{'\n'}
-                  • L'aimant facilite la collection de bonus{'\n'}
-                  • Plus vous montez, plus c'est difficile !
-                </Text>
-              </ScrollView>
-              <TouchableOpacity style={styles.helpCloseButton} onPress={this.toggleHelp}>
-                <Text style={styles.helpCloseText}>Fermer</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-
-        {/* Game Over */}
-        {gameOver && (
-          <View style={styles.gameOverContainer}>
-            <Text style={styles.gameOverText}>Game Over!</Text>
-            <Text style={styles.finalScoreText}>Score: {score}</Text>
-            <TouchableOpacity style={styles.restartButton} onPress={this.initGame}>
-              <Text style={styles.restartButtonText}>Recommencer</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Contrôles */}
-        <View style={styles.controlsContainer}>
-          <TouchableOpacity
-            style={styles.controlButton}
-            onPressIn={this.handleLeftPressIn}
-            onPressOut={this.handleLeftPressOut}>
-            <View style={styles.arrowLeft} />
-          </TouchableOpacity>
-          <View style={styles.controlSpacer} />
-          <TouchableOpacity
-            style={styles.controlButton}
-            onPressIn={this.handleRightPressIn}
-            onPressOut={this.handleRightPressOut}>
-            <View style={styles.arrowRight} />
-          </TouchableOpacity>
-        </View>
+      {/* UI Overlay */}
+      <View style={styles.scoreContainer}>
+        <Text style={styles.scoreText}>Score: {score}</Text>
+        <Text style={styles.highScoreText}>High: {highScore}</Text>
+        {shield && <Text style={styles.powerUpText}>🛡️ SHIELD</Text>}
+        {magnet && <Text style={styles.powerUpText}>🧲 MAGNET</Text>}
       </View>
-    );
-  }
-}
+
+      {/* FPS Counter */}
+      {showFPS && (
+        <View style={styles.fpsContainer}>
+          <Text style={styles.fpsText}>{fps} FPS</Text>
+        </View>
+      )}
+
+      {/* Bouton pause */}
+      <TouchableOpacity style={styles.pauseButton} onPress={togglePause}>
+        <Text style={styles.pauseText}>{paused ? '▶' : '⏸'}</Text>
+      </TouchableOpacity>
+
+      {/* Menu Pause */}
+      {paused && !gameOver && (
+        <View style={styles.pauseMenu}>
+          <Text style={styles.pauseMenuTitle}>PAUSE</Text>
+          <TouchableOpacity style={styles.menuButton} onPress={togglePause}>
+            <Text style={styles.menuButtonText}>Reprendre</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.menuButton} onPress={toggleHelp}>
+            <Text style={styles.menuButtonText}>Aide</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.menuButton} onPress={toggleFPS}>
+            <Text style={styles.menuButtonText}>
+              {showFPS ? '✓ ' : ''}Afficher FPS
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.menuButton} onPress={initGame}>
+            <Text style={styles.menuButtonText}>Recommencer</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Modal Aide */}
+      <Modal
+        visible={showHelp}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={toggleHelp}>
+        <View style={styles.helpModal}>
+          <View style={styles.helpContainer}>
+            <Text style={styles.helpTitle}>🎮 AIDE</Text>
+            <ScrollView style={styles.helpScroll}>
+              <Text style={styles.helpSection}>📋 Objectif</Text>
+              <Text style={styles.helpText}>
+                Montez le plus haut possible en sautant de plateforme en plateforme !
+              </Text>
+
+              <Text style={styles.helpSection}>🎁 Bonus</Text>
+
+              <View style={styles.bonusHelpItem}>
+                <Text style={styles.bonusHelpIcon}>⭐</Text>
+                <View style={styles.bonusHelpInfo}>
+                  <Text style={styles.bonusHelpName}>Étoile</Text>
+                  <Text style={styles.bonusHelpDesc}>+10 points bonus</Text>
+                </View>
+              </View>
+
+              <View style={styles.bonusHelpItem}>
+                <Text style={styles.bonusHelpIcon}>🌸</Text>
+                <View style={styles.bonusHelpInfo}>
+                  <Text style={styles.bonusHelpName}>Ressort</Text>
+                  <Text style={styles.bonusHelpDesc}>+5 points • Super saut vers le haut</Text>
+                </View>
+              </View>
+
+              <View style={styles.bonusHelpItem}>
+                <Text style={styles.bonusHelpIcon}>🛡️</Text>
+                <View style={styles.bonusHelpInfo}>
+                  <Text style={styles.bonusHelpName}>Bouclier</Text>
+                  <Text style={styles.bonusHelpDesc}>+15 points • Protection contre 1 chute (5s)</Text>
+                </View>
+              </View>
+
+              <View style={styles.bonusHelpItem}>
+                <Text style={styles.bonusHelpIcon}>🧲</Text>
+                <View style={styles.bonusHelpInfo}>
+                  <Text style={styles.bonusHelpName}>Aimant</Text>
+                  <Text style={styles.bonusHelpDesc}>+5 points • Attire les bonus proches (3s)</Text>
+                </View>
+              </View>
+
+              <Text style={styles.helpSection}>🕹️ Contrôles</Text>
+              <Text style={styles.helpText}>
+                • Boutons ← → : Déplacer la créature{'\n'}
+                • Bouton ⏸ : Pause{'\n'}
+                • Le personnage saute automatiquement sur les plateformes
+              </Text>
+
+              <Text style={styles.helpSection}>💡 Astuces</Text>
+              <Text style={styles.helpText}>
+                • Collectez les bonus pour booster votre score{'\n'}
+                • Le bouclier vous sauve d'une chute fatale{'\n'}
+                • L'aimant facilite la collection de bonus{'\n'}
+                • Plus vous montez, plus c'est difficile !
+              </Text>
+            </ScrollView>
+            <TouchableOpacity style={styles.helpCloseButton} onPress={toggleHelp}>
+              <Text style={styles.helpCloseText}>Fermer</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Game Over */}
+      {gameOver && (
+        <View style={styles.gameOverContainer}>
+          <Text style={styles.gameOverText}>Game Over!</Text>
+          <Text style={styles.finalScoreText}>Score: {score}</Text>
+          <TouchableOpacity style={styles.restartButton} onPress={initGame}>
+            <Text style={styles.restartButtonText}>Recommencer</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Contrôles */}
+      <View style={styles.controlsContainer}>
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPressIn={handleLeftPressIn}
+          onPressOut={handleLeftPressOut}>
+          <View style={styles.arrowLeft} />
+        </TouchableOpacity>
+        <View style={styles.controlSpacer} />
+        <TouchableOpacity
+          style={styles.controlButton}
+          onPressIn={handleRightPressIn}
+          onPressOut={handleRightPressOut}>
+          <View style={styles.arrowRight} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+};
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#E8F4F8',
+    backgroundColor: '#000',
   },
-  // Parallaxe
-  parallaxContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+  canvas: {
+    flex: 1,
   },
-  parallaxLayer1: {
-    position: 'absolute',
-    width: '100%',
-    height: SCREEN_HEIGHT * 2,
-    backgroundColor: '#87CEEB',
-  },
-  mountain1: {
-    position: 'absolute',
-    bottom: 0,
-    left: '10%',
-    width: 200,
-    height: 150,
-    backgroundColor: '#5A9FD4',
-    borderTopLeftRadius: 100,
-    borderTopRightRadius: 80,
-    opacity: 0.6,
-  },
-  mountain2: {
-    position: 'absolute',
-    bottom: 0,
-    right: '15%',
-    width: 180,
-    height: 120,
-    backgroundColor: '#6BB1E0',
-    borderTopLeftRadius: 90,
-    borderTopRightRadius: 90,
-    opacity: 0.5,
-  },
-  parallaxLayer2: {
-    position: 'absolute',
-    width: '100%',
-    height: SCREEN_HEIGHT * 2,
-  },
-  cloud: {
-    position: 'absolute',
-    width: 80,
-    height: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.6)',
-    borderRadius: 40,
-  },
-  parallaxLayer3: {
-    position: 'absolute',
-    width: '100%',
-    height: SCREEN_HEIGHT * 2,
-  },
-  // UI
   scoreContainer: {
     position: 'absolute',
     top: 40,
@@ -746,96 +694,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontFamily: 'monospace',
   },
-  gameArea: {
-    flex: 1,
-    position: 'relative',
-  },
-  // Joueur (créature)
-  player: {
-    position: 'absolute',
-    width: PLAYER_SIZE,
-    height: PLAYER_SIZE,
-  },
-  creature: {
-    width: PLAYER_SIZE,
-    height: PLAYER_SIZE,
-    position: 'relative',
-  },
-  creatureBody: {
-    width: PLAYER_SIZE,
-    height: PLAYER_SIZE,
-    backgroundColor: '#FF6B6B',
-    borderRadius: PLAYER_SIZE / 2,
-    borderWidth: 3,
-    borderColor: '#C92A2A',
-  },
-  creatureBodyShield: {
-    borderColor: '#4ECDC4',
-    borderWidth: 4,
-  },
-  creatureEyes: {
-    position: 'absolute',
-    top: 12,
-    left: 8,
-    right: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  creatureEye: {
-    width: 8,
-    height: 8,
-    backgroundColor: '#FFF',
-    borderRadius: 4,
-    borderWidth: 2,
-    borderColor: '#000',
-  },
-  creatureMouth: {
-    position: 'absolute',
-    bottom: 10,
-    left: 12,
-    width: 16,
-    height: 8,
-    backgroundColor: '#C92A2A',
-    borderBottomLeftRadius: 8,
-    borderBottomRightRadius: 8,
-  },
-  shieldEffect: {
-    position: 'absolute',
-    top: -5,
-    left: -5,
-    right: -5,
-    bottom: -5,
-    borderRadius: (PLAYER_SIZE + 10) / 2,
-    borderWidth: 3,
-    borderColor: '#4ECDC4',
-    opacity: 0.5,
-  },
-  // Plateformes et bonus
-  platform: {
-    position: 'absolute',
-    backgroundColor: '#51CF66',
-    borderRadius: 7,
-    borderWidth: 2,
-    borderColor: '#2F9E44',
-  },
-  bonus: {
-    position: 'absolute',
-    width: BONUS_SIZE,
-    height: BONUS_SIZE,
-    borderRadius: BONUS_SIZE / 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#FFF',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: 2},
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-  },
-  bonusIcon: {
-    fontSize: 18,
-  },
-  // Contrôles
   controlsContainer: {
     position: 'absolute',
     bottom: 40,
@@ -886,7 +744,6 @@ const styles = StyleSheet.create({
   controlSpacer: {
     flex: 1,
   },
-  // Menu pause
   pauseMenu: {
     position: 'absolute',
     top: 0,
@@ -920,7 +777,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFF',
   },
-  // Modal aide
   helpModal: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.9)',
@@ -995,7 +851,6 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFF',
   },
-  // Game over
   gameOverContainer: {
     position: 'absolute',
     top: 0,
