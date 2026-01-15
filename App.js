@@ -136,12 +136,6 @@ class App extends Component {
           playerX < platform.x + platform.width
         ) {
           velocityY = JUMP_FORCE;
-
-          // Augmenter le score quand on monte
-          if (platform.y < cameraY) {
-            const points = Math.floor((cameraY - platform.y) / 10);
-            score = Math.max(score, points);
-          }
         }
       });
     }
@@ -151,6 +145,10 @@ class App extends Component {
       const diff = SCREEN_HEIGHT / 3 - playerY;
       cameraY -= diff;
       playerY = SCREEN_HEIGHT / 3;
+
+      // Calculer le score basé sur la hauteur atteinte
+      const currentScore = Math.floor(Math.abs(cameraY) / 10);
+      score = Math.max(score, currentScore);
 
       // Générer de nouvelles plateformes
       const highestPlatform = platforms.reduce((min, p) =>
@@ -271,14 +269,14 @@ class App extends Component {
             style={styles.controlButton}
             onPressIn={this.handleLeftPressIn}
             onPressOut={this.handleLeftPressOut}>
-            <Text style={styles.controlText}>←</Text>
+            <View style={styles.arrowLeft} />
           </TouchableOpacity>
           <View style={styles.controlSpacer} />
           <TouchableOpacity
             style={styles.controlButton}
             onPressIn={this.handleRightPressIn}
             onPressOut={this.handleRightPressOut}>
-            <Text style={styles.controlText}>→</Text>
+            <View style={styles.arrowRight} />
           </TouchableOpacity>
         </View>
       </View>
@@ -353,10 +351,33 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: '#FFF',
   },
-  controlText: {
-    fontSize: 40,
-    color: '#333',
-    fontWeight: 'bold',
+  arrowLeft: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderRightWidth: 25,
+    borderTopWidth: 15,
+    borderBottomWidth: 15,
+    borderLeftWidth: 0,
+    borderRightColor: '#333',
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderLeftColor: 'transparent',
+  },
+  arrowRight: {
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
+    borderLeftWidth: 25,
+    borderTopWidth: 15,
+    borderBottomWidth: 15,
+    borderRightWidth: 0,
+    borderLeftColor: '#333',
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderRightColor: 'transparent',
   },
   controlSpacer: {
     flex: 1,
